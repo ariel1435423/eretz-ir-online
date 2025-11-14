@@ -1,0 +1,5 @@
+{
+  "name": "ארץ עיר Online",
+  "description": "An interactive 'Country-City' (ארץ עיר) game where users select categories, receive a random letter, and submit answers within a time limit. The application uses AI to validate and score the answers, providing instant feedback and tracking scores across rounds.",
+  "requestFramePermissions": []
+}
