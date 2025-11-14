@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { CATEGORIES, ROUND_TIMES, ROUND_COUNTS } from '../constants';
 import { GameSettings, Player, Group, UserProfile } from '../types';
@@ -14,10 +15,18 @@ interface OnlineLobbyProps {
     onBack: () => void;
     onPlayerReady: (playerId: string, isReady: boolean) => void;
     onSwitchTeam: (playerId: string) => void;
+    onAddBotToLobby: (groupId: string) => void;
+    onRemoveBotFromLobby: (playerId: string) => void;
 }
 
-const PlayerListItem: React.FC<{player: Player, isHostView: boolean, isCurrentUser: boolean, onSwitchTeam: () => void, onReadyToggle: () => void}> = 
-    ({player, isHostView, isCurrentUser, onSwitchTeam, onReadyToggle}) => {
+const PlayerListItem: React.FC<{
+    player: Player, 
+    isHostView: boolean, 
+    isCurrentUser: boolean, 
+    onSwitchTeam: () => void, 
+    onReadyToggle: () => void,
+    onRemoveBot: () => void
+}> = ({player, isHostView, isCurrentUser, onSwitchTeam, onReadyToggle, onRemoveBot}) => {
     
     return (
         <li className="flex items-center gap-3 p-2 bg-white rounded-md shadow-sm">
@@ -29,14 +38,19 @@ const PlayerListItem: React.FC<{player: Player, isHostView: boolean, isCurrentUs
                     {player.isReady ? 'מוכן' : 'לא מוכן'}
                 </div>
             </div>
-            {isCurrentUser && (
-                 <button onClick={onReadyToggle} className={`px-2 py-1 text-xs font-bold rounded ${player.isReady ? 'bg-slate-200 text-slate-700' : 'bg-green-500 text-white'}`}>
-                    {player.isReady ? 'בטל' : 'מוכן'}
-                </button>
-            )}
-            {(isHostView || isCurrentUser) && (
-                 <button onClick={onSwitchTeam} className="px-2 py-1 text-xs font-bold rounded bg-blue-100 text-blue-700" title="החלף קבוצה">&#x21C6;</button>
-            )}
+             <div className="flex items-center gap-1">
+                {isCurrentUser && (
+                     <button onClick={onReadyToggle} className={`px-2 py-1 text-xs font-bold rounded ${player.isReady ? 'bg-slate-200 text-slate-700' : 'bg-green-500 text-white'}`}>
+                        {player.isReady ? 'בטל' : 'מוכן'}
+                    </button>
+                )}
+                {(isHostView || isCurrentUser) && !player.isHost && (
+                     <button onClick={onSwitchTeam} className="w-6 h-6 flex items-center justify-center text-xs font-bold rounded bg-blue-100 text-blue-700" title="החלף קבוצה">&#x21C6;</button>
+                )}
+                {isHostView && player.playerType === 'computer' && (
+                    <button onClick={onRemoveBot} className="w-6 h-6 flex items-center justify-center text-sm font-bold rounded bg-red-100 text-red-700" title="הסר בוט">&times;</button>
+                )}
+            </div>
         </li>
     );
 };
@@ -124,7 +138,7 @@ const SettingsPanel: React.FC<{settings: GameSettings, onSettingsChange: (settin
 
 
 const OnlineLobby: React.FC<OnlineLobbyProps> = (props) => {
-    const { settings, onSettingsChange, players, groups, lobbyId, inviteCode, userProfile, onStartGame, onBack, onPlayerReady, onSwitchTeam } = props;
+    const { settings, onSettingsChange, players, groups, lobbyId, inviteCode, userProfile, onStartGame, onBack, onPlayerReady, onSwitchTeam, onAddBotToLobby, onRemoveBotFromLobby } = props;
 
     const host = players.find(p => p.isHost);
     const isHost = userProfile.playerId === host?.id;
@@ -142,6 +156,19 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = (props) => {
 
     const teamAPlayers = getTeamPlayers(teamA);
     const teamBPlayers = getTeamPlayers(teamB);
+
+    const structureCapacityMap = { 
+        '1v1': { A: 1, B: 1 }, 
+        '2v2': { A: 2, B: 2 }, 
+        '1v2': { A: 1, B: 2 }, 
+        '1v3': { A: 1, B: 3 },
+        'freeForAll': { A: 2, B: 2 }
+    };
+    const teamCapacities = structureCapacityMap[settings.gameStructure];
+    const teamAEmptySlots = Math.max(0, teamCapacities.A - teamAPlayers.length);
+    const teamBEmptySlots = Math.max(0, teamCapacities.B - teamBPlayers.length);
+    
+    const isGameReadyToStart = isHost && allReady && players.length > 1 && teamAPlayers.length > 0 && teamBPlayers.length > 0;
 
     return (
         <div className="animate-fade-in w-full">
@@ -170,7 +197,15 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = (props) => {
                                     isCurrentUser={p.id === userProfile.playerId}
                                     onSwitchTeam={() => onSwitchTeam(p.id)}
                                     onReadyToggle={() => onPlayerReady(p.id, !p.isReady)}
+                                    onRemoveBot={() => onRemoveBotFromLobby(p.id)}
                                 />
+                            ))}
+                            {isHost && Array.from({ length: teamAEmptySlots }).map((_, i) => (
+                                <li key={`empty-A-${i}`}>
+                                    <button onClick={() => onAddBotToLobby('A')} className="w-full text-center p-3 border-2 border-dashed border-slate-300 text-slate-500 hover:bg-slate-100 hover:border-slate-400 rounded-md transition-colors">
+                                        + הוסף בוט
+                                    </button>
+                                </li>
                             ))}
                         </ul>
                     </div>
@@ -185,7 +220,15 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = (props) => {
                                     isCurrentUser={p.id === userProfile.playerId}
                                     onSwitchTeam={() => onSwitchTeam(p.id)}
                                     onReadyToggle={() => onPlayerReady(p.id, !p.isReady)}
+                                    onRemoveBot={() => onRemoveBotFromLobby(p.id)}
                                 />
+                            ))}
+                             {isHost && Array.from({ length: teamBEmptySlots }).map((_, i) => (
+                                <li key={`empty-B-${i}`}>
+                                    <button onClick={() => onAddBotToLobby('B')} className="w-full text-center p-3 border-2 border-dashed border-slate-300 text-slate-500 hover:bg-slate-100 hover:border-slate-400 rounded-md transition-colors">
+                                        + הוסף בוט
+                                    </button>
+                                </li>
                             ))}
                         </ul>
                     </div>
@@ -204,7 +247,7 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = (props) => {
                 </button>
                 <button
                     onClick={onStartGame}
-                    disabled={!isHost || !allReady}
+                    disabled={!isGameReadyToStart}
                     className="w-full px-8 py-3 bg-green-600 text-white text-lg font-bold rounded-lg hover:bg-green-700 transition-colors disabled:bg-slate-400 disabled:cursor-not-allowed"
                 >
                     {!allReady ? 'ממתין שכולם יהיו מוכנים...' : 'התחל משחק!'}
