@@ -1,15 +1,11 @@
 
 import React, { useState } from 'react';
 import { CATEGORIES, ROUND_TIMES, ROUND_COUNTS } from '../constants';
-import { GameSettings, Player, Group, UserProfile } from '../types';
+import { GameSettings, Player, Group, UserProfile, LobbyState } from '../types';
 
 interface OnlineLobbyProps {
-    settings: GameSettings;
+    lobby: LobbyState;
     onSettingsChange: (settings: Partial<GameSettings>) => void;
-    players: Player[];
-    groups: Group[];
-    lobbyId: string;
-    inviteCode: string;
     userProfile: UserProfile;
     onStartGame: () => void;
     onBack: () => void;
@@ -143,7 +139,8 @@ const SettingsPanel: React.FC<{settings: GameSettings, onSettingsChange: (settin
 
 
 const OnlineLobby: React.FC<OnlineLobbyProps> = (props) => {
-    const { settings, onSettingsChange, players, groups, lobbyId, inviteCode, userProfile, onStartGame, onBack, onPlayerReady, onSwitchTeam, onAddBotToLobby, onRemoveBotFromLobby, onKickPlayer } = props;
+    const { lobby, onSettingsChange, userProfile, onStartGame, onBack, onPlayerReady, onSwitchTeam, onAddBotToLobby, onRemoveBotFromLobby, onKickPlayer } = props;
+    const { settings, players, groups, inviteCode } = lobby;
 
     const host = players.find(p => p.isHost);
     const isHost = userProfile.playerId === host?.id;
