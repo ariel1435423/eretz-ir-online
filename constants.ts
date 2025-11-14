@@ -14,7 +14,7 @@ export const CATEGORIES: string[] = [
 
 export const AVATARS: Avatar[] = Array.from({ length: 24 }, (_, i) => ({
     id: i + 1,
-    src: `/avatars/avatar-${i + 1}.png`,
+   src: `/avatar-${i + 1}.png`,
     name: `avatar-${i + 1}`,
 }));
 
