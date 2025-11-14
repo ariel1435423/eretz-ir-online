@@ -338,6 +338,26 @@ const App: React.FC = () => {
         })));
     };
 
+    const handleKickPlayer = (playerId: string) => {
+        const host = players.find(p => p.isHost);
+        if (userProfile?.playerId !== host?.id) {
+            console.warn("Attempt to kick by non-host blocked.");
+            return;
+        }
+
+        const playerToKick = players.find(p => p.id === playerId);
+        if (!playerToKick || playerToKick.isHost || playerToKick.playerType !== 'human') {
+             console.warn("Invalid kick attempt blocked.");
+            return;
+        }
+    
+        setPlayers(prev => prev.filter(p => p.id !== playerId));
+        setGroups(prev => prev.map(g => ({
+            ...g,
+            players: g.players.filter(pId => pId !== playerId)
+        })));
+    };
+
     const handleStartGame = (gameSettings: GameSettings) => {
         if (!userProfile?.isProfileComplete || !userProfile.avatarId) return;
         setSettings(gameSettings);
@@ -663,6 +683,7 @@ const App: React.FC = () => {
                             userProfile={userProfile}
                             onAddBotToLobby={handleAddBotToLobby}
                             onRemoveBotFromLobby={handleRemoveBotFromLobby}
+                            onKickPlayer={handleKickPlayer}
                         />;
             case 'game':
                 if (showCountdown) return null;
