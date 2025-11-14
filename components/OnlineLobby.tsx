@@ -17,6 +17,7 @@ interface OnlineLobbyProps {
     onSwitchTeam: (playerId: string) => void;
     onAddBotToLobby: (groupId: string) => void;
     onRemoveBotFromLobby: (playerId: string) => void;
+    onKickPlayer: (playerId: string) => void;
 }
 
 const PlayerListItem: React.FC<{
@@ -25,8 +26,9 @@ const PlayerListItem: React.FC<{
     isCurrentUser: boolean, 
     onSwitchTeam: () => void, 
     onReadyToggle: () => void,
-    onRemoveBot: () => void
-}> = ({player, isHostView, isCurrentUser, onSwitchTeam, onReadyToggle, onRemoveBot}) => {
+    onRemoveBot: () => void,
+    onKickPlayer: () => void,
+}> = ({player, isHostView, isCurrentUser, onSwitchTeam, onReadyToggle, onRemoveBot, onKickPlayer}) => {
     
     return (
         <li className="flex items-center gap-3 p-2 bg-white rounded-md shadow-sm">
@@ -49,6 +51,9 @@ const PlayerListItem: React.FC<{
                 )}
                 {isHostView && player.playerType === 'computer' && (
                     <button onClick={onRemoveBot} className="w-6 h-6 flex items-center justify-center text-sm font-bold rounded bg-red-100 text-red-700" title="הסר בוט">&times;</button>
+                )}
+                 {isHostView && player.playerType === 'human' && !player.isHost && (
+                    <button onClick={onKickPlayer} className="w-6 h-6 flex items-center justify-center text-sm font-bold rounded bg-red-100 text-red-700" title="העף שחקן">&times;</button>
                 )}
             </div>
         </li>
@@ -138,7 +143,7 @@ const SettingsPanel: React.FC<{settings: GameSettings, onSettingsChange: (settin
 
 
 const OnlineLobby: React.FC<OnlineLobbyProps> = (props) => {
-    const { settings, onSettingsChange, players, groups, lobbyId, inviteCode, userProfile, onStartGame, onBack, onPlayerReady, onSwitchTeam, onAddBotToLobby, onRemoveBotFromLobby } = props;
+    const { settings, onSettingsChange, players, groups, lobbyId, inviteCode, userProfile, onStartGame, onBack, onPlayerReady, onSwitchTeam, onAddBotToLobby, onRemoveBotFromLobby, onKickPlayer } = props;
 
     const host = players.find(p => p.isHost);
     const isHost = userProfile.playerId === host?.id;
@@ -198,6 +203,7 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = (props) => {
                                     onSwitchTeam={() => onSwitchTeam(p.id)}
                                     onReadyToggle={() => onPlayerReady(p.id, !p.isReady)}
                                     onRemoveBot={() => onRemoveBotFromLobby(p.id)}
+                                    onKickPlayer={() => onKickPlayer(p.id)}
                                 />
                             ))}
                             {isHost && Array.from({ length: teamAEmptySlots }).map((_, i) => (
@@ -221,6 +227,7 @@ const OnlineLobby: React.FC<OnlineLobbyProps> = (props) => {
                                     onSwitchTeam={() => onSwitchTeam(p.id)}
                                     onReadyToggle={() => onPlayerReady(p.id, !p.isReady)}
                                     onRemoveBot={() => onRemoveBotFromLobby(p.id)}
+                                    onKickPlayer={() => onKickPlayer(p.id)}
                                 />
                             ))}
                              {isHost && Array.from({ length: teamBEmptySlots }).map((_, i) => (
