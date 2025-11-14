@@ -154,3 +154,24 @@ export interface TeamScore {
     groupId: string;
     score: number;
 }
+
+export interface LobbyState {
+    id: string;
+    inviteCode: string;
+    settings: GameSettings;
+    players: Player[];
+    groups: Group[];
+    teamScores: TeamScore[];
+    gameState: 'lobby' | 'countdown' | 'in_game' | 'results' | 'game_over';
+    currentRound: number;
+    roundResults: RoundResult[];
+}
+
+export type BroadcastMessageType = 'LOBBY_UPDATED' | 'GAME_STARTED' | 'LOBBY_CLOSED';
+
+export interface BroadcastMessage {
+    type: BroadcastMessageType;
+    payload: {
+        lobbyId: string;
+    };
+}
