@@ -1,7 +1,6 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
-import { Page, Player, GameSettings, RoundResult, GameOverStats, Group, TeamScore, GameMode, BotAnswerAction, UserProfile, BotState, ProfileEditor, ForfeitScope, ExtraTimeTarget, GameStructure, PlayerProgress, PlayerProgressStatus, PlayerStats } from './types';
-// FIX: Import GLOBAL_SCORE_CONFIG to resolve reference errors.
+import { Page, Player, GameSettings, RoundResult, GameOverStats, Group, TeamScore, GameMode, BotAnswerAction, UserProfile, BotState, ProfileEditor, ForfeitScope, ExtraTimeTarget, GameStructure, PlayerProgress, PlayerProgressStatus, PlayerStats, LobbyState, BroadcastMessage, BroadcastMessageType } from './types';
 import { DEFAULT_SETTINGS, AVATARS, GLOBAL_SCORE_CONFIG } from './constants';
 import { getBotAnswerPlan, validateAnswers, getGameSummary } from './services/geminiService';
 import HomeMenu from './components/HomeMenu';
@@ -10,6 +9,27 @@ import OnlineLobby from './components/OnlineLobby';
 import JoinLobby from './components/JoinLobby';
 import GameRound from './components/GameRound';
 import ResultsTable from './components/ResultsTable';
+
+const LOBBY_CHANNEL = new BroadcastChannel('eretz-ir-lobby-channel');
+
+// --- Real-time Simulation Service ---
+
+const getLobby = (lobbyId: string): LobbyState | null => {
+    const lobbies = JSON.parse(localStorage.getItem('eretz-ir-lobbies') || '{}');
+    return lobbies[lobbyId] || null;
+};
+
+const saveLobby = (lobby: LobbyState) => {
+    const lobbies = JSON.parse(localStorage.getItem('eretz-ir-lobbies') || '{}');
+    lobbies[lobby.id] = lobby;
+    localStorage.setItem('eretz-ir-lobbies', JSON.stringify(lobbies));
+};
+
+const broadcastUpdate = (lobbyId: string, type: BroadcastMessageType = 'LOBBY_UPDATED') => {
+    LOBBY_CHANNEL.postMessage({ type, payload: { lobbyId } });
+};
+
+// --- React Components ---
 
 const Countdown: React.FC<{ onFinish: () => void }> = ({ onFinish }) => {
     const [count, setCount] = useState(3);
@@ -24,7 +44,7 @@ const Countdown: React.FC<{ onFinish: () => void }> = ({ onFinish }) => {
 
     return (
         <div className="fixed inset-0 bg-slate-900 bg-opacity-75 flex items-center justify-center z-50">
-            <div key={count} className="countdown-text animate-pop-in">{count > 0 ? count : 'Go!'}</div>
+            <div key={count} className="countdown-text animate-pop-in">{count > 0 ? count : 'צא!'}</div>
         </div>
     );
 };
@@ -73,7 +93,7 @@ const ProfileEditorModal: React.FC<{ editor: ProfileEditor, onSave: (nickname: s
                         ) : (
                             <div className="flex justify-center">
                                 <button onClick={() => setIsAvatarPickerOpen(true)} className="w-32 h-32 p-1 rounded-lg border-2 border-slate-300 hover:border-blue-500 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-300 transition-colors">
-                                    <img src={avatar} alt="Current Avatar" className="w-full h-full object-cover rounded-md" />
+                                    <img src={avatar} alt="אווטאר נוכחי" className="w-full h-full object-cover rounded-md" />
                                 </button>
                             </div>
                         )}
@@ -93,29 +113,23 @@ const App: React.FC = () => {
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [playerStats, setPlayerStats] = useState<PlayerStats | null>(null);
     const [profileEditor, setProfileEditor] = useState<ProfileEditor | null>(null);
-    const [settings, setSettings] = useState<GameSettings>(DEFAULT_SETTINGS);
-    const [gameMode, setGameMode] = useState<GameMode>('vs_computer');
-    const [players, setPlayers] = useState<Player[]>([]);
-    const [groups, setGroups] = useState<Group[]>([]);
-    const [teamScores, setTeamScores] = useState<TeamScore[]>([]);
-    const [currentRound, setCurrentRound] = useState(1);
+    const [lobby, setLobby] = useState<LobbyState | null>(null);
+    
+    // Non-synced states
     const [letterOptions, setLetterOptions] = useState<string[]>([]);
     const [currentLetter, setCurrentLetter] = useState<string>('');
     const [chooserPlayerId, setChooserPlayerId] = useState<string | null>(null);
     const [botPlan, setBotPlan] = useState<BotAnswerAction[]>([]);
     const [botState, setBotState] = useState<BotState | null>(null);
     const [extraTimeFor, setExtraTimeFor] = useState<ExtraTimeTarget>(null);
-    const [roundResults, setRoundResults] = useState<RoundResult[]>([]);
     const [gameOverStats, setGameOverStats] = useState<GameOverStats | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [showCountdown, setShowCountdown] = useState(false);
-    const [lobbyId, setLobbyId] = useState<string | null>(null);
-    const [inviteCode, setInviteCode] = useState<string | null>(null);
     const [playerProgress, setPlayerProgress] = useState<PlayerProgress[]>([]);
     const [forfeitModalContent, setForfeitModalContent] = useState<{ round: string; game: string } | null>(null);
 
-
+    // Effect to load user profile once on mount
     useEffect(() => {
         try {
             const savedProfile = localStorage.getItem('eretzIrUserProfile');
@@ -151,6 +165,41 @@ const App: React.FC = () => {
             setPlayerStats({ playerId: newPlayerId, totalPoints: 0, totalWins: 0, totalGames: 0, totalForfeits: 0, lastGameResult: null });
         }
     }, []);
+    
+    // Effect to listen for real-time lobby updates
+    useEffect(() => {
+        const handleMessage = (event: MessageEvent<BroadcastMessage>) => {
+            if (lobby && event.data.payload.lobbyId === lobby.id) {
+                const updatedLobby = getLobby(lobby.id);
+                if (updatedLobby) {
+                    setLobby(updatedLobby);
+                    if (event.data.type === 'GAME_STARTED' && updatedLobby.gameState === 'countdown') {
+                        setPage('game');
+                        setShowCountdown(true);
+                    }
+                } else {
+                    // Lobby was deleted or closed
+                    setLobby(null);
+                    setPage('homeMenu');
+                    alert('הלובי נסגר על ידי המארח.');
+                }
+            }
+        };
+
+        LOBBY_CHANNEL.addEventListener('message', handleMessage);
+        return () => LOBBY_CHANNEL.removeEventListener('message', handleMessage);
+    }, [lobby]);
+
+
+    const updateLobbyAndBroadcast = (lobbyId: string, updateFn: (lobby: LobbyState) => LobbyState) => {
+        const currentLobby = getLobby(lobbyId);
+        if (currentLobby) {
+            const newLobby = updateFn(currentLobby);
+            saveLobby(newLobby);
+            broadcastUpdate(newLobby.id);
+            setLobby(newLobby); // Immediate feedback for the current user
+        }
+    };
 
     const getRandomLetters = (count: number) => {
         const shuffled = [...'אבגדהוזחטיכלמנסעפצקרשת'].sort(() => 0.5 - Math.random());
@@ -158,10 +207,10 @@ const App: React.FC = () => {
     };
 
     const updateGlobalPlayerStats = useCallback((gameOutcome: GameOverStats) => {
-        if (!userProfile || !playerStats) return;
+        if (!userProfile || !playerStats || !lobby) return;
 
         let newStats = { ...playerStats };
-        const humanPlayer = players.find(p => p.id === userProfile.playerId);
+        const humanPlayer = lobby.players.find(p => p.id === userProfile.playerId);
         if (!humanPlayer) return;
 
         newStats.totalGames += 1;
@@ -178,14 +227,14 @@ const App: React.FC = () => {
                 resultType = 'win';
             }
         } else {
-            const humanGroup = groups.find(g => g.players.includes(humanPlayer.id));
+            const humanGroup = lobby.groups.find(g => g.players.includes(humanPlayer.id));
             if (humanGroup?.groupId === gameOutcome.winner.id) {
                 newStats.totalPoints += GLOBAL_SCORE_CONFIG.winPoints;
                 newStats.totalWins += 1;
                 resultType = 'win';
             } else {
-                const teamA = teamScores.find(ts => ts.groupId === 'A');
-                const teamB = teamScores.find(ts => ts.groupId === 'B');
+                const teamA = lobby.teamScores.find(ts => ts.groupId === 'A');
+                const teamB = lobby.teamScores.find(ts => ts.groupId === 'B');
                 if (teamA?.score === teamB?.score) {
                     newStats.totalPoints += GLOBAL_SCORE_CONFIG.drawPoints;
                     resultType = 'draw';
@@ -199,7 +248,7 @@ const App: React.FC = () => {
         newStats.lastGameResult = resultType;
         setPlayerStats(newStats);
         localStorage.setItem(`eretzIrPlayerStats_${userProfile.playerId}`, JSON.stringify(newStats));
-    }, [userProfile, playerStats, players, groups, teamScores]);
+    }, [userProfile, playerStats, lobby]);
     
     const handleUpdateProfile = (nickname: string, avatarId: string) => {
         const newProfile = { ...userProfile!, nickname, avatarId, isProfileComplete: true };
@@ -220,192 +269,216 @@ const App: React.FC = () => {
 
     const handleNavigateToSettings = (mode: GameMode) => {
         if (!userProfile?.isProfileComplete) return;
-        setGameMode(mode);
-        setSettings(prev => ({...prev, gameMode: mode}));
+        setLobby({
+            id: 'local_solo_game', inviteCode: '',
+            settings: {...DEFAULT_SETTINGS, gameMode: mode},
+            players: [], groups: [], teamScores: [], gameState: 'lobby',
+            currentRound: 1, roundResults: []
+        });
         setPage('lobby');
     };
     
     const handleCreateOnlineLobby = (structure: GameStructure) => {
         if (!userProfile?.isProfileComplete || !userProfile.avatarId) return;
         
-        setGameMode('vs_player');
         const newSettings: GameSettings = {...DEFAULT_SETTINGS, gameMode: 'vs_player', gameStructure: structure };
-        setSettings(newSettings);
-
         const humanPlayer: Player = { 
-            id: userProfile.playerId, 
-            name: userProfile.nickname!, 
-            avatar: userProfile.avatarId, 
-            score: 0, 
-            isReady: false, 
-            playerType: 'human', 
-            isHost: true,
-            groupId: 'A'
+            id: userProfile.playerId, name: userProfile.nickname!, avatar: userProfile.avatarId, 
+            score: 0, isReady: false, playerType: 'human', isHost: true, groupId: 'A'
         };
-        
-        setPlayers([humanPlayer]);
-        setGroups([
+        const groups = [
             { groupId: 'A', players: [humanPlayer.id] },
             { groupId: 'B', players: [] }
-        ]);
+        ];
         
-        setLobbyId(`lobby_${Math.random().toString(36).substring(7)}`);
-        setInviteCode(Math.random().toString(36).substring(2, 8).toUpperCase());
+        const newLobby: LobbyState = {
+            id: `lobby_${Math.random().toString(36).substring(7)}`,
+            inviteCode: Math.random().toString(36).substring(2, 8).toUpperCase(),
+            settings: newSettings,
+            players: [humanPlayer],
+            groups,
+            teamScores: groups.map(g => ({ groupId: g.groupId, score: 0 })),
+            gameState: 'lobby',
+            currentRound: 1,
+            roundResults: []
+        };
+
+        saveLobby(newLobby);
+        setLobby(newLobby);
         setPage('onlineLobby');
     };
     
     const handleJoinLobbyAttempt = (code: string) => {
-        if (code === inviteCode) {
-             setPage('onlineLobby');
+        const lobbies = JSON.parse(localStorage.getItem('eretz-ir-lobbies') || '{}');
+        const lobbyToJoin: LobbyState | undefined = Object.values(lobbies).find((l: any) => l.inviteCode === code && l.gameState === 'lobby');
+
+        if (lobbyToJoin && userProfile) {
+            const isPlayerInLobby = lobbyToJoin.players.some(p => p.id === userProfile.playerId);
+            if (isPlayerInLobby) {
+                 setLobby(lobbyToJoin);
+                 setPage('onlineLobby');
+                 return null; // Already in lobby, just rejoin
+            }
+            
+            const newPlayer: Player = {
+                 id: userProfile.playerId, name: userProfile.nickname!, avatar: userProfile.avatarId!,
+                 score: 0, isReady: false, playerType: 'human', isHost: false
+            };
+            
+            // Simple logic to add to the emptier team
+            const groupA = lobbyToJoin.groups.find(g => g.groupId === 'A')!;
+            const groupB = lobbyToJoin.groups.find(g => g.groupId === 'B')!;
+            const targetGroup = groupA.players.length <= groupB.players.length ? 'A' : 'B';
+            newPlayer.groupId = targetGroup;
+
+            updateLobbyAndBroadcast(lobbyToJoin.id, lobby => {
+                lobby.players.push(newPlayer);
+                const group = lobby.groups.find(g => g.groupId === targetGroup);
+                if(group) group.players.push(newPlayer.id);
+                return lobby;
+            });
+            return null;
         } else {
-             return "קוד לובי שגוי. נסה שוב.";
+             return "קוד לובי שגוי או שהמשחק כבר התחיל.";
         }
-        return null;
     }
     
     const handleSettingsChange = (newSettings: Partial<GameSettings>) => {
-        setSettings(prev => ({...prev, ...newSettings}));
+        if (!lobby) return;
+        // FIX: Replaced state mutation with an immutable update. This resolves potential type inference issues and aligns with React best practices for state management.
+        updateLobbyAndBroadcast(lobby.id, l => {
+            return {
+                ...l,
+                settings: {
+                    ...l.settings,
+                    ...newSettings,
+                }
+            };
+        });
     }
 
-
     const handlePlayerReady = (playerId: string, isReady: boolean) => {
-        setPlayers(prev => prev.map(p => p.id === playerId ? { ...p, isReady } : p));
+        if (!lobby) return;
+        updateLobbyAndBroadcast(lobby.id, l => {
+            l.players = l.players.map(p => p.id === playerId ? { ...p, isReady } : p);
+            return l;
+        });
     };
 
     const handleSwitchTeam = (playerId: string) => {
-        const playerToSwitch = players.find(p => p.id === playerId);
-        if (!playerToSwitch || !playerToSwitch.groupId) return;
+        if (!lobby) return;
+        updateLobbyAndBroadcast(lobby.id, l => {
+            const player = l.players.find(p => p.id === playerId);
+            if (!player || !player.groupId) return l;
 
-        const currentGroup = groups.find(g => g.players.includes(playerId));
-        const otherGroup = groups.find(g => g.groupId !== currentGroup?.groupId);
-        if (!currentGroup || !otherGroup) return;
-
-        const newGroups: Group[] = groups.map(g => {
-            if (g.groupId === currentGroup.groupId) {
-                return { ...g, players: g.players.filter(pId => pId !== playerId) };
-            }
-            if (g.groupId === otherGroup.groupId) {
-                return { ...g, players: [...g.players, playerId] };
-            }
-            return g;
+            const currentGroupId = player.groupId;
+            const otherGroupId = currentGroupId === 'A' ? 'B' : 'A';
+            player.groupId = otherGroupId;
+            
+            const currentGroup = l.groups.find(g => g.groupId === currentGroupId);
+            if (currentGroup) currentGroup.players = currentGroup.players.filter(id => id !== playerId);
+            
+            const otherGroup = l.groups.find(g => g.groupId === otherGroupId);
+            if (otherGroup) otherGroup.players.push(playerId);
+            
+            return l;
         });
-
-        const newPlayers: Player[] = players.map(p => 
-            p.id === playerId ? { ...p, groupId: otherGroup.groupId } : p
-        );
-
-        setPlayers(newPlayers);
-        setGroups(newGroups);
     };
 
     const handleAddBotToLobby = (groupId: string) => {
-        const structureMap = { '1v1': 2, '2v2': 4, '1v2': 3, '1v3': 4, 'freeForAll': 4 };
-        const totalCapacity = structureMap[settings.gameStructure];
-        if (players.length >= totalCapacity) return;
-    
-        const teamACapacityMap = { '1v1': 1, '2v2': 2, '1v2': 1, '1v3': 1, 'freeForAll': 2 };
-        const teamACapacity = teamACapacityMap[settings.gameStructure];
-    
-        const groupACount = groups.find(g => g.groupId === 'A')?.players.length || 0;
-        const groupBCount = groups.find(g => g.groupId === 'B')?.players.length || 0;
-    
-        if (groupId === 'A' && groupACount >= teamACapacity) return;
-        if (groupId === 'B' && groupBCount >= (totalCapacity - teamACapacity)) return;
-    
-        const botNumber = players.filter(p => p.playerType === 'computer').length + 1;
-        const usedAvatars = players.map(p => p.avatar);
-        const availableBotAvatar = AVATARS.find(av => !usedAvatars.includes(av.src)) || AVATARS[players.length % AVATARS.length];
-        
-        const newBot: Player = {
-            id: `p_bot_${Date.now()}`, name: `בוט ${botNumber}`, avatar: availableBotAvatar.src,
-            score: 0, isReady: true, playerType: 'computer', groupId: groupId
-        };
-    
-        setPlayers(prev => [...prev, newBot]);
-        setGroups(prev => prev.map(g => 
-            g.groupId === groupId ? { ...g, players: [...g.players, newBot.id] } : g
-        ));
+        if (!lobby) return;
+        updateLobbyAndBroadcast(lobby.id, l => {
+            const botNumber = l.players.filter(p => p.playerType === 'computer').length + 1;
+            const usedAvatars = l.players.map(p => p.avatar);
+            const availableBotAvatar = AVATARS.find(av => !usedAvatars.includes(av.src)) || AVATARS[l.players.length % AVATARS.length];
+            
+            const newBot: Player = {
+                id: `p_bot_${Date.now()}`, name: `בוט ${botNumber}`, avatar: availableBotAvatar.src,
+                score: 0, isReady: true, playerType: 'computer', groupId: groupId
+            };
+
+            l.players.push(newBot);
+            const group = l.groups.find(g => g.groupId === groupId);
+            if (group) group.players.push(newBot.id);
+            return l;
+        });
     };
 
     const handleRemoveBotFromLobby = (playerId: string) => {
-        const playerToRemove = players.find(p => p.id === playerId);
-        if (!playerToRemove || playerToRemove.playerType !== 'computer') return;
-    
-        setPlayers(prev => prev.filter(p => p.id !== playerId));
-        setGroups(prev => prev.map(g => ({
-            ...g,
-            players: g.players.filter(pId => pId !== playerId)
-        })));
+        if (!lobby) return;
+        updateLobbyAndBroadcast(lobby.id, l => {
+            l.players = l.players.filter(p => p.id !== playerId);
+            l.groups.forEach(g => {
+                g.players = g.players.filter(pId => pId !== playerId);
+            });
+            return l;
+        });
     };
-
+    
     const handleKickPlayer = (playerId: string) => {
-        const host = players.find(p => p.isHost);
-        if (userProfile?.playerId !== host?.id) {
-            console.warn("Attempt to kick by non-host blocked.");
-            return;
-        }
-
-        const playerToKick = players.find(p => p.id === playerId);
-        if (!playerToKick || playerToKick.isHost || playerToKick.playerType !== 'human') {
-             console.warn("Invalid kick attempt blocked.");
-            return;
-        }
-    
-        setPlayers(prev => prev.filter(p => p.id !== playerId));
-        setGroups(prev => prev.map(g => ({
-            ...g,
-            players: g.players.filter(pId => pId !== playerId)
-        })));
+         if (!lobby) return;
+        updateLobbyAndBroadcast(lobby.id, l => {
+            l.players = l.players.filter(p => p.id !== playerId);
+            l.groups.forEach(g => {
+                g.players = g.players.filter(pId => pId !== playerId);
+            });
+            return l;
+        });
     };
 
-    const handleStartGame = (gameSettings: GameSettings) => {
+    const handleStartGame = (gameSettings?: GameSettings) => {
         if (!userProfile?.isProfileComplete || !userProfile.avatarId) return;
-        setSettings(gameSettings);
-        
-        let initialPlayers: Player[];
 
-        if (gameSettings.gameMode === 'vs_player') {
-             initialPlayers = [...players];
+        if (lobby?.settings.gameMode === 'vs_player') {
+            updateLobbyAndBroadcast(lobby.id, l => {
+                l.gameState = 'countdown';
+                return l;
+            });
+            broadcastUpdate(lobby.id, 'GAME_STARTED');
+            setPage('game');
+            setShowCountdown(true);
         } else {
+            // Logic for starting a solo/vs_computer game
+            const settings = gameSettings || lobby!.settings;
             const humanPlayer: Player = { id: userProfile.playerId, name: userProfile.nickname!, avatar: userProfile.avatarId, score: 0, isReady: true, playerType: 'human' };
-            initialPlayers = [humanPlayer];
-            if (gameSettings.gameMode === 'vs_computer') {
+            let players = [humanPlayer];
+            
+            if (settings.gameMode === 'vs_computer') {
                 const botAvatarSrc = AVATARS.find(av => av.src !== userProfile.avatarId)?.src || AVATARS[1].src;
                 const botPlayer: Player = { id: 'p_bot', name: 'מחשב', avatar: botAvatarSrc, score: 0, isReady: true, playerType: 'computer' };
-                initialPlayers.push(botPlayer);
+                players.push(botPlayer);
             }
-        }
-        
-        let newGroups: Group[] = [];
-        if (gameSettings.gameMode === 'vs_player') {
-            newGroups = [...groups];
-        } else if (gameSettings.gameStructure === '1v1' && initialPlayers.length >= 2) {
-            initialPlayers[0].groupId = 'A';
-            initialPlayers[1].groupId = 'B';
-            newGroups.push({ groupId: 'A', players: [initialPlayers[0].id] });
-            newGroups.push({ groupId: 'B', players: [initialPlayers[1].id] });
-        }
-        
-        const newTeamScores: TeamScore[] = newGroups.map(g => ({ groupId: g.groupId, score: 0 }));
+            
+            let groups: Group[] = [];
+            if (settings.gameStructure === '1v1' && players.length >= 2) {
+                players[0].groupId = 'A';
+                players[1].groupId = 'B';
+                groups.push({ groupId: 'A', players: [players[0].id] });
+                groups.push({ groupId: 'B', players: [players[1].id] });
+            }
+            
+            const teamScores = groups.map(g => ({ groupId: g.groupId, score: 0 }));
+            
+            const newLobby: LobbyState = {
+                id: `solo_${Date.now()}`, inviteCode: '', settings, players, groups, teamScores,
+                gameState: 'countdown', currentRound: 1, roundResults: []
+            };
 
-        setGroups(newGroups.filter(g => g.players.length > 0));
-        setTeamScores(newTeamScores);
-        setPlayers(initialPlayers);
-        setCurrentRound(1);
-        setRoundResults([]);
-        setGameOverStats(null);
-        setPage('game');
-        setShowCountdown(true);
+            setLobby(newLobby);
+            setPage('game');
+            setShowCountdown(true);
+        }
     };
     
     const handleCountdownFinish = () => {
+        if (!lobby) return;
         setShowCountdown(false);
-        const chooserIndex = (currentRound - 1) % players.length;
-        setChooserPlayerId(players[chooserIndex]?.id || null);
+        const chooserIndex = (lobby.currentRound - 1) % lobby.players.length;
+        setChooserPlayerId(lobby.players[chooserIndex]?.id || null);
         setLetterOptions(getRandomLetters(3));
         setExtraTimeFor(null);
         setForfeitModalContent(null);
-        setPlayerProgress(players.map(p => ({
+        setPlayerProgress(lobby.players.map(p => ({
             playerId: p.id,
             status: 'waiting',
             answersCount: 0,
@@ -414,10 +487,11 @@ const App: React.FC = () => {
     };
 
     const handleLetterSelected = async (letter: string) => {
+        if (!lobby) return;
         setCurrentLetter(letter);
-        const opponents = players.filter(p => p.playerType === 'computer');
+        const opponents = lobby.players.filter(p => p.playerType === 'computer');
         if(opponents.length > 0){
-            const plannedTime = settings.roundTime * (0.3 + Math.random() * 0.5);
+            const plannedTime = lobby.settings.roundTime * (0.3 + Math.random() * 0.5);
             setBotState({
                 plannedFinishTimeInRound: plannedTime,
                 isBotFinished: false,
@@ -426,7 +500,7 @@ const App: React.FC = () => {
 
             setIsLoading(true);
             try {
-                const plan = await getBotAnswerPlan(letter, settings.categories, settings);
+                const plan = await getBotAnswerPlan(letter, lobby.settings.categories, lobby.settings);
                 setBotPlan(plan);
             } catch (err) {
                 console.error("Failed to get bot plan:", err);
@@ -458,51 +532,38 @@ const App: React.FC = () => {
     };
 
     const handleRoundFinish = useCallback(async (playerAnswers: Record<string, string[]>) => {
-        if (page !== 'game') return;
+        if (page !== 'game' || !lobby) return;
         
         setIsLoading(true);
         setError(null);
-        
         setBotState(prev => prev ? { ...prev, isBotFinished: true } : null);
-        
-        setPlayerProgress(prev => prev.map(p => {
-            if (!p.finishedRound) {
-                return { ...p, status: 'times_up' };
-            }
-            return p;
-        }));
+        setPlayerProgress(prev => prev.map(p => (!p.finishedRound ? { ...p, status: 'times_up' } : p)));
 
-        const humanPlayer = players.find(p => p.playerType === 'human');
+        const humanPlayer = lobby.players.find(p => p.playerType === 'human');
         const humanAnswers = humanPlayer ? playerAnswers : {};
-
         const p1FlatAnswers = Object.entries(humanAnswers).flatMap(([category, answers]) => 
             answers.map(answer => ({ category, answer }))
         ).filter(a => a.answer.trim() !== '');
 
         try {
-            const result = await validateAnswers(currentLetter, settings.categories, p1FlatAnswers, players, settings, groups, botPlan);
+            const result = await validateAnswers(currentLetter, lobby.settings.categories, p1FlatAnswers, lobby.players, lobby.settings, lobby.groups, botPlan);
             
-            setRoundResults(prev => [...prev, result]);
+            const newLobby: LobbyState = {...lobby};
+            newLobby.roundResults.push(result);
             
-            const newPlayers = players.map(p => ({...p}));
-            newPlayers.forEach(player => {
-                const playerScore = result.scores[player.id]?.total || 0;
-                player.score += playerScore;
+            newLobby.players.forEach(player => {
+                player.score += result.scores[player.id]?.total || 0;
             });
-            setPlayers(newPlayers);
-            
-            const newTeamScores = teamScores.map(ts => ({...ts}));
-            newTeamScores.forEach(teamScore => {
-                const group = groups.find(g => g.groupId === teamScore.groupId);
+
+            newLobby.teamScores.forEach(teamScore => {
+                const group = newLobby.groups.find(g => g.groupId === teamScore.groupId);
                 if (group) {
-                    const roundTeamScore = group.players.reduce((sum, playerId) => {
-                        return sum + (result.scores[playerId]?.total || 0);
-                    }, 0);
-                    teamScore.score += roundTeamScore;
+                    teamScore.score += group.players.reduce((sum, playerId) => sum + (result.scores[playerId]?.total || 0), 0);
                 }
             });
-            setTeamScores(newTeamScores);
-            
+
+            if (lobby.settings.gameMode === 'vs_player') saveLobby(newLobby);
+            setLobby(newLobby);
             setPage('roundResults');
 
         } catch (err) {
@@ -515,34 +576,35 @@ const App: React.FC = () => {
             setBotPlan([]);
             setBotState(null);
         }
-    }, [currentLetter, settings, players, groups, teamScores, botPlan, page]);
+    }, [currentLetter, lobby, botPlan, page]);
 
     const handleHumanFinish = useCallback(() => {
-        if (!userProfile) return;
+        if (!userProfile || !lobby) return;
         updatePlayerProgress(userProfile.playerId, { status: 'finished', finishedRound: true });
 
-        const humanPlayer = players.find(p => p.id === userProfile.playerId);
-        const humanGroup = groups.find(g => g.players.includes(humanPlayer?.id || ''));
+        const humanPlayer = lobby.players.find(p => p.id === userProfile.playerId);
+        const humanGroup = lobby.groups.find(g => g.players.includes(humanPlayer?.id || ''));
         if (!humanGroup) return;
 
         const allTeamFinished = humanGroup.players.every(pId => {
             const progress = playerProgress.find(p => p.playerId === pId);
-            return progress?.finishedRound || pId === userProfile.playerId; // Check current finish
+            return progress?.finishedRound || pId === userProfile.playerId;
         });
 
         if (allTeamFinished) {
-            setExtraTimeFor('bot'); // Assuming 'bot' is the other team for now
+            setExtraTimeFor('bot');
         }
-    }, [userProfile, players, groups, playerProgress, updatePlayerProgress]);
+    }, [userProfile, lobby, playerProgress, updatePlayerProgress]);
     
     const handlePrepareForfeit = useCallback(() => {
-        const humanPlayer = players.find(p => p.playerType === 'human');
+        if (!lobby) return;
+        const humanPlayer = lobby.players.find(p => p.playerType === 'human');
         if (!humanPlayer) return;
 
-        const forfeiterTeamScore = teamScores.find(ts => ts.groupId === humanPlayer.groupId)?.score || 0;
-        const opponentTeamScore = teamScores.find(ts => ts.groupId !== humanPlayer.groupId)?.score || 0;
+        const forfeiterTeamScore = lobby.teamScores.find(ts => ts.groupId === humanPlayer.groupId)?.score || 0;
+        const opponentTeamScore = lobby.teamScores.find(ts => ts.groupId !== humanPlayer.groupId)?.score || 0;
         
-        const isLastRound = currentRound === settings.rounds;
+        const isLastRound = lobby.currentRound === lobby.settings.rounds;
         const forfeiterIsWinning = forfeiterTeamScore > opponentTeamScore;
         const dynamicBonus = (isLastRound || forfeiterIsWinning) ? 50 : 30;
 
@@ -550,36 +612,33 @@ const App: React.FC = () => {
             round: `פרישה מהסיבוב תגרע 20 נקודות ממך ותוסיף בונוס של ${dynamicBonus} נקודות לקבוצה היריבה.`,
             game: `פרישה מהמשחק תגרע 50 נקודות מהניקוד המצטבר שלך ותיתן ניצחון לקבוצה השנייה.`
         });
-    }, [players, teamScores, currentRound, settings.rounds]);
+    }, [lobby]);
 
     const handleForfeit = useCallback((scope: ForfeitScope) => {
         setForfeitModalContent(null);
-        const forfeitingPlayer = players.find(p => p.playerType === 'human');
-        if (!forfeitingPlayer || !userProfile) return;
+        if (!lobby || !userProfile) return;
+        const forfeitingPlayer = lobby.players.find(p => p.playerType === 'human');
+        if (!forfeitingPlayer) return;
         
         updatePlayerProgress(forfeitingPlayer.id, { status: 'forfeited', finishedRound: true });
-
-        const newPlayers = players.map(p => ({...p}));
-        const newTeamScores = teamScores.map(ts => ({...ts}));
         
-        const forfeiter = newPlayers.find(p => p.id === forfeitingPlayer.id)!;
-        const opponentGroup = groups.find(g => g.groupId !== forfeiter.groupId)!;
+        let newLobby = {...lobby};
+        const forfeiter = newLobby.players.find(p => p.id === forfeitingPlayer.id)!;
+        const opponentGroup = newLobby.groups.find(g => g.groupId !== forfeiter.groupId)!;
         
         if (scope === 'forfeit_round') {
             const penalty = -20;
-            const forfeiterTeamScore = teamScores.find(ts => ts.groupId === forfeiter.groupId)?.score || 0;
-            const opponentTeamScore = teamScores.find(ts => ts.groupId !== forfeiter.groupId)?.score || 0;
-            const isLastRound = currentRound === settings.rounds;
+            const forfeiterTeamScore = newLobby.teamScores.find(ts => ts.groupId === forfeiter.groupId)?.score || 0;
+            const opponentTeamScore = newLobby.teamScores.find(ts => ts.groupId !== forfeiter.groupId)?.score || 0;
+            const isLastRound = newLobby.currentRound === newLobby.settings.rounds;
             const forfeiterIsWinning = forfeiterTeamScore > opponentTeamScore;
             const reward = (isLastRound || forfeiterIsWinning) ? 50 : 30;
             
             forfeiter.score += penalty;
-
             opponentGroup.players.forEach(pId => {
-                const winner = newPlayers.find(p => p.id === pId)!;
-                winner.score += reward / opponentGroup.players.length;
+                newLobby.players.find(p => p.id === pId)!.score += reward / opponentGroup.players.length;
             });
-            newTeamScores.forEach(ts => {
+            newLobby.teamScores.forEach(ts => {
                 if(ts.groupId === forfeiter.groupId) ts.score += penalty;
                 if(ts.groupId === opponentGroup.groupId) ts.score += reward;
             });
@@ -589,12 +648,12 @@ const App: React.FC = () => {
                 endedBy: 'forfeit', forfeitingPlayerId: forfeitingPlayer.id,
                 forfeitingPlayerPenalty: penalty, winnerForfeitPoints: reward,
             };
-            setRoundResults(prev => [...prev, forfeitResult]);
+            newLobby.roundResults.push(forfeitResult);
             setPage('roundResults');
 
         } else if (scope === 'forfeit_game') {
-            const penalty = -50; // This is a global score penalty, handled in updateGlobalPlayerStats
-            const winnerTeamScore = newTeamScores.find(ts => ts.groupId === opponentGroup.groupId)!;
+            const penalty = -50;
+            const winnerTeamScore = newLobby.teamScores.find(ts => ts.groupId === opponentGroup.groupId)!;
             const stats: GameOverStats = {
                 endedBy: 'forfeit', forfeitingPlayerId: forfeiter.id,
                 forfeitingPlayerPenalty: penalty,
@@ -606,20 +665,25 @@ const App: React.FC = () => {
             setPage('gameOver');
         }
         
+        if (lobby.settings.gameMode === 'vs_player') saveLobby(newLobby);
+        setLobby(newLobby);
         setCurrentLetter('');
         setBotPlan([]);
         setBotState(null);
-    }, [players, teamScores, groups, currentLetter, updatePlayerProgress, userProfile, updateGlobalPlayerStats, currentRound, settings.rounds]);
+    }, [lobby, updatePlayerProgress, userProfile, updateGlobalPlayerStats, currentLetter]);
 
     const handleNextRound = async () => {
-        if (currentRound < settings.rounds) {
-            setCurrentRound(prev => prev + 1);
+        if (!lobby) return;
+        if (lobby.currentRound < lobby.settings.rounds) {
+            const newLobby = {...lobby, currentRound: lobby.currentRound + 1};
+            if (lobby.settings.gameMode === 'vs_player') saveLobby(newLobby);
+            setLobby(newLobby);
             setPage('game');
             setShowCountdown(true);
         } else {
             setIsLoading(true);
             try {
-                const stats = await getGameSummary(roundResults, players, groups);
+                const stats = await getGameSummary(lobby.roundResults, lobby.players, lobby.groups);
                 setGameOverStats(stats);
                 updateGlobalPlayerStats(stats);
                 setPage('gameOver');
@@ -634,27 +698,14 @@ const App: React.FC = () => {
     };
     
     const handleNewGame = () => {
+        setLobby(null);
         setPage('homeMenu');
-        setPlayers([]);
-        setGroups([]);
-        setTeamScores([]);
-        setSettings(DEFAULT_SETTINGS);
     };
 
     const handleBack = useCallback(() => {
-        switch(page) {
-            case 'lobby':
-            case 'onlineLobby':
-            case 'joinLobby':
-            case 'gameOver':
-            case 'roundResults':
-                setPage('homeMenu');
-                break;
-            // Removed 'game' case to prevent backing out
-            default:
-                setPage('homeMenu');
-        }
-    }, [page]);
+        setLobby(null);
+        setPage('homeMenu');
+    }, []);
     
     const renderPage = () => {
         if (!userProfile) {
@@ -667,16 +718,12 @@ const App: React.FC = () => {
             case 'joinLobby':
                 return <JoinLobby onJoin={handleJoinLobbyAttempt} onBack={handleBack} />;
             case 'lobby':
-                return <GameSettingsComponent onStartGame={handleStartGame} onBack={handleBack} settings={settings} onSettingsChange={setSettings} />;
+                return <GameSettingsComponent onStartGame={handleStartGame} onBack={handleBack} settings={lobby!.settings} onSettingsChange={(s) => setLobby(l => l ? {...l, settings: s} : null)} />;
             case 'onlineLobby':
-                return <OnlineLobby 
-                            settings={settings}
+                return lobby ? <OnlineLobby 
+                            lobby={lobby}
                             onSettingsChange={handleSettingsChange}
-                            players={players}
-                            groups={groups}
-                            lobbyId={lobbyId!}
-                            inviteCode={inviteCode!}
-                            onStartGame={() => handleStartGame(settings)}
+                            onStartGame={handleStartGame}
                             onBack={handleBack}
                             onPlayerReady={handlePlayerReady}
                             onSwitchTeam={handleSwitchTeam}
@@ -684,33 +731,34 @@ const App: React.FC = () => {
                             onAddBotToLobby={handleAddBotToLobby}
                             onRemoveBotFromLobby={handleRemoveBotFromLobby}
                             onKickPlayer={handleKickPlayer}
-                        />;
+                        /> : null;
             case 'game':
+                if (!lobby) return null;
                 if (showCountdown) return null;
-                const chooser = players.find(p => p.id === chooserPlayerId);
-                const humanPlayer = players.find(p => p.playerType === 'human');
+                const chooser = lobby.players.find(p => p.id === chooserPlayerId);
+                const humanPlayer = lobby.players.find(p => p.playerType === 'human');
                 const humanAnswersCount = playerProgress.find(p => p.playerId === humanPlayer?.id)?.answersCount ?? 0;
                 return (
                     <GameRound
                         letterOptions={letterOptions}
                         chosenLetter={currentLetter}
-                        categories={settings.categories}
-                        duration={settings.roundTime}
-                        difficulty={settings.difficulty}
+                        categories={lobby.settings.categories}
+                        duration={lobby.settings.roundTime}
+                        difficulty={lobby.settings.difficulty}
                         onFinishRound={handleRoundFinish}
                         onLetterSelected={handleLetterSelected}
                         chooserPlayerId={chooserPlayerId}
                         chooserName={chooser?.name || ''}
-                        players={players}
-                        groups={groups}
-                        gameMode={gameMode}
+                        players={lobby.players}
+                        groups={lobby.groups}
+                        gameMode={lobby.settings.gameMode}
                         botPlan={botPlan}
                         botState={botState}
                         extraTimeFor={extraTimeFor}
                         onHumanFinish={handleHumanFinish}
                         onBotFinish={(botId: string) => {
                             handleOpponentFinished(botId);
-                            const allBotsFinished = players.filter(p => p.playerType === 'computer').every(bot => 
+                            const allBotsFinished = lobby!.players.filter(p => p.playerType === 'computer').every(bot => 
                                 playerProgress.find(p => p.playerId === bot.id)?.finishedRound
                             );
                              if(allBotsFinished && !playerProgress.find(p => p.playerId === userProfile?.playerId)?.finishedRound) {
@@ -729,20 +777,21 @@ const App: React.FC = () => {
                 );
             case 'roundResults':
             case 'gameOver':
-                 const lastResult = roundResults[roundResults.length - 1];
+                 if (!lobby) return null;
+                 const lastResult = lobby.roundResults[lobby.roundResults.length - 1];
                  return lastResult ? (
                     <ResultsTable
                         result={lastResult}
-                        players={players}
-                        groups={groups}
-                        teamScores={teamScores}
-                        currentRound={currentRound}
-                        totalRounds={settings.rounds}
+                        players={lobby.players}
+                        groups={lobby.groups}
+                        teamScores={lobby.teamScores}
+                        currentRound={lobby.currentRound}
+                        totalRounds={lobby.settings.rounds}
                         isGameOver={page === 'gameOver'}
                         gameOverStats={gameOverStats}
                         onNextRound={handleNextRound}
                         onNewGame={handleNewGame}
-                        gameMode={settings.gameMode}
+                        gameMode={lobby.settings.gameMode}
                         onBack={handleBack}
                         playerStats={playerStats}
                     />
@@ -768,7 +817,7 @@ const App: React.FC = () => {
                     </div>
                      <button onClick={handleOpenProfileEditor} className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-100 transition-colors">
                         <span className="font-semibold">{userProfile.nickname}</span>
-                        {userProfile.avatarId && <img src={userProfile.avatarId} alt="avatar" className="w-10 h-10 rounded-full object-cover" />}
+                        {userProfile.avatarId && <img src={userProfile.avatarId} alt="אווטאר" className="w-10 h-10 rounded-full object-cover" />}
                     </button>
                 </header>
             )}
