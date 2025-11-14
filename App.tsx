@@ -232,39 +232,26 @@ const App: React.FC = () => {
         const newSettings: GameSettings = {...DEFAULT_SETTINGS, gameMode: 'vs_player', gameStructure: structure };
         setSettings(newSettings);
 
-        const humanPlayer: Player = { id: userProfile.playerId, name: userProfile.nickname!, avatar: userProfile.avatarId, score: 0, isReady: false, playerType: 'human', isHost: true };
-        let newPlayers: Player[] = [humanPlayer];
+        const humanPlayer: Player = { 
+            id: userProfile.playerId, 
+            name: userProfile.nickname!, 
+            avatar: userProfile.avatarId, 
+            score: 0, 
+            isReady: false, 
+            playerType: 'human', 
+            isHost: true,
+            groupId: 'A'
+        };
         
-        const structureMap = { '1v1': 2, '2v2': 4, '1v2': 3, '1v3': 4, 'freeForAll': 4 };
-        const totalPlayers = structureMap[structure] || 2;
-
-        const availableBotAvatars = AVATARS.filter(av => av.src !== userProfile.avatarId);
+        setPlayers([humanPlayer]);
+        setGroups([
+            { groupId: 'A', players: [humanPlayer.id] },
+            { groupId: 'B', players: [] }
+        ]);
         
-        for (let i = 1; i < totalPlayers; i++) {
-            const botAvatar = availableBotAvatars[i % availableBotAvatars.length].src;
-            newPlayers.push({ id: `p_bot_${i}`, name: `שחקן ${i+1}`, avatar: botAvatar, score: 0, isReady: false, playerType: 'computer' });
-        }
-        
-        const newGroups: Group[] = [{groupId: 'A', players: []}, {groupId: 'B', players: []}];
-        const teamACapacity = (structure === '2v2' || structure === '1v2') ? 2 : (structure === 'freeForAll' ? 2 : 1);
-        
-        newPlayers.forEach(p => {
-            const targetGroupId = newGroups[0].players.length < teamACapacity ? 'A' : 'B';
-            p.groupId = targetGroupId;
-            const targetGroup = newGroups.find(g => g.groupId === targetGroupId)!;
-            targetGroup.players.push(p.id);
-        });
-
-        setPlayers(newPlayers);
-        setGroups(newGroups);
         setLobbyId(`lobby_${Math.random().toString(36).substring(7)}`);
         setInviteCode(Math.random().toString(36).substring(2, 8).toUpperCase());
         setPage('onlineLobby');
-
-        // Simulate bots getting ready
-        setTimeout(() => {
-            setPlayers(currentPlayers => currentPlayers.map(p => p.playerType === 'computer' ? { ...p, isReady: true } : p));
-        }, 1500 + Math.random() * 1000);
     };
     
     const handleJoinLobbyAttempt = (code: string) => {
@@ -309,6 +296,46 @@ const App: React.FC = () => {
 
         setPlayers(newPlayers);
         setGroups(newGroups);
+    };
+
+    const handleAddBotToLobby = (groupId: string) => {
+        const structureMap = { '1v1': 2, '2v2': 4, '1v2': 3, '1v3': 4, 'freeForAll': 4 };
+        const totalCapacity = structureMap[settings.gameStructure];
+        if (players.length >= totalCapacity) return;
+    
+        const teamACapacityMap = { '1v1': 1, '2v2': 2, '1v2': 1, '1v3': 1, 'freeForAll': 2 };
+        const teamACapacity = teamACapacityMap[settings.gameStructure];
+    
+        const groupACount = groups.find(g => g.groupId === 'A')?.players.length || 0;
+        const groupBCount = groups.find(g => g.groupId === 'B')?.players.length || 0;
+    
+        if (groupId === 'A' && groupACount >= teamACapacity) return;
+        if (groupId === 'B' && groupBCount >= (totalCapacity - teamACapacity)) return;
+    
+        const botNumber = players.filter(p => p.playerType === 'computer').length + 1;
+        const usedAvatars = players.map(p => p.avatar);
+        const availableBotAvatar = AVATARS.find(av => !usedAvatars.includes(av.src)) || AVATARS[players.length % AVATARS.length];
+        
+        const newBot: Player = {
+            id: `p_bot_${Date.now()}`, name: `בוט ${botNumber}`, avatar: availableBotAvatar.src,
+            score: 0, isReady: true, playerType: 'computer', groupId: groupId
+        };
+    
+        setPlayers(prev => [...prev, newBot]);
+        setGroups(prev => prev.map(g => 
+            g.groupId === groupId ? { ...g, players: [...g.players, newBot.id] } : g
+        ));
+    };
+
+    const handleRemoveBotFromLobby = (playerId: string) => {
+        const playerToRemove = players.find(p => p.id === playerId);
+        if (!playerToRemove || playerToRemove.playerType !== 'computer') return;
+    
+        setPlayers(prev => prev.filter(p => p.id !== playerId));
+        setGroups(prev => prev.map(g => ({
+            ...g,
+            players: g.players.filter(pId => pId !== playerId)
+        })));
     };
 
     const handleStartGame = (gameSettings: GameSettings) => {
@@ -634,6 +661,8 @@ const App: React.FC = () => {
                             onPlayerReady={handlePlayerReady}
                             onSwitchTeam={handleSwitchTeam}
                             userProfile={userProfile}
+                            onAddBotToLobby={handleAddBotToLobby}
+                            onRemoveBotFromLobby={handleRemoveBotFromLobby}
                         />;
             case 'game':
                 if (showCountdown) return null;
